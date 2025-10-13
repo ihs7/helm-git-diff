@@ -1,0 +1,57 @@
+name: Assert Output
+description: Run a command and assert that its output contains a pattern or indicates no changes
+
+inputs:
+  working-directory:
+    description: The directory to run the command in
+    required: true
+  command:
+    description: The command to run
+    required: true
+  should-contain:
+    description: The pattern that the output should contain
+    required: false
+  should-be-empty:
+    description: If true, assert that output contains "no changes"
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      shell: bash
+      run: |
+        if [ "${{ inputs.should-be-empty }}" = "true" ] && [ -n "${{ inputs.should-contain }}" ]; then
+          echo "✗ Error: Cannot use both 'should-contain' and 'should-be-empty' at the same time"
+          exit 1
+        fi
+        if [ "${{ inputs.should-be-empty }}" != "true" ] && [ -z "${{ inputs.should-contain }}" ]; then
+          echo "✗ Error: Must provide either 'should-contain' or 'should-be-empty'"
+          exit 1
+        fi
+
+    - name: Run command and assert output
+      shell: bash
+      run: |
+        cd "${{ inputs.working-directory }}"
+        OUTPUT=$(${{ inputs.command }} 2>&1 || true)
+
+        if [ "${{ inputs.should-be-empty }}" = "true" ]; then
+          if echo "$OUTPUT" | grep -q "no changes"; then
+            echo "✓ Output contains 'no changes' as expected"
+          else
+            echo "✗ Expected 'no changes' but got output:"
+            echo "$OUTPUT"
+            exit 1
+          fi
+        else
+          if echo "$OUTPUT" | grep -q "${{ inputs.should-contain }}"; then
+            echo "✓ Output contains '${{ inputs.should-contain }}'"
+          else
+            echo "✗ Output doesn't contain '${{ inputs.should-contain }}'"
+            echo "Actual output:"
+            echo "$OUTPUT"
+            exit 1
+          fi
+        fi

@@ -1,0 +1,8 @@
+apiVersion: v2
+name: test-with-deps
+version: 0.1.0
+description: A test chart with local file dependencies
+dependencies:
+  - name: test-library
+    version: 0.1.0
+    repository: file://../test-library

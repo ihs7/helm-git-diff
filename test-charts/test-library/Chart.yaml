@@ -1,0 +1,5 @@
+apiVersion: v2
+name: test-library
+version: 0.1.0
+type: library
+description: A test library chart for integration tests

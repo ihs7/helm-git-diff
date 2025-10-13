@@ -1,0 +1,11 @@
+name: git-diff
+flags:
+  - --base
+  - --current
+  - --chart-dir
+  - --values
+  - --set
+  - --fail-on-diff
+  - --no-color
+  - -h
+  - --help

@@ -1,0 +1,10 @@
+replicaCount: 1
+
+image:
+  repository: busybox
+  tag: "1.36"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80

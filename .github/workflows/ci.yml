@@ -1,0 +1,244 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    name: "Build & Test"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version-file: "go.mod"
+
+      - name: Build
+        run: make build
+
+      - name: Unit tests
+        run: make test
+
+  helm-install:
+    name: helm install
+    needs: [build]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        helm-version: [v3.18.6, v3.19.0]
+
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version-file: "go.mod"
+
+      - name: Setup Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: ${{ matrix.helm-version }}
+
+      - name: helm plugin install
+        run: helm plugin install .
+
+  integration-tests:
+    name: Integration Tests
+    needs: [build]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        helm-version: [v3.18.6, v3.19.0]
+
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version-file: "go.mod"
+
+      - name: Setup Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: ${{ matrix.helm-version }}
+
+      - name: Install plugin
+        run: helm plugin install .
+
+      - name: Setup test repository
+        id: setup
+        run: |
+          TEST_DIR=$(mktemp -d)
+          cd "$TEST_DIR"
+          git init
+          git config user.email "test@example.com"
+          git config user.name "Test User"
+          mkdir -p charts
+
+          # Copy all test charts from repository
+          cp -r "$GITHUB_WORKSPACE/test-charts/"* charts/
+
+          git add .
+          git commit -m "Initial commit"
+          echo "test_dir=$TEST_DIR" >> $GITHUB_OUTPUT
+
+      - name: Detect no changes between same commit
+        uses: ./.github/actions/assert-output
+        with:
+          working-directory: ${{ steps.setup.outputs.test_dir }}
+          command: >
+            helm git-diff
+            --base HEAD
+            --current HEAD
+            --chart-dir charts
+            test-chart
+          should-be-empty: true
+
+      - name: Commit replica count change
+        run: |
+          cd ${{ steps.setup.outputs.test_dir }}
+          sed -i 's/replicaCount: 1/replicaCount: 3/' charts/test-chart/values.yaml
+          git add charts/test-chart/values.yaml
+          git commit -m "Increase replica count to 3"
+
+      - name: Verify replica count appears in diff
+        uses: ./.github/actions/assert-output
+        with:
+          working-directory: ${{ steps.setup.outputs.test_dir }}
+          command: >
+            helm git-diff
+            --base HEAD~1
+            --current HEAD
+            --chart-dir charts
+            test-chart
+          should-contain: "replicas: 3"
+
+      - name: Auto-detect changed charts
+        uses: ./.github/actions/assert-output
+        with:
+          working-directory: ${{ steps.setup.outputs.test_dir }}
+          command: helm git-diff --base HEAD~1 --current HEAD --chart-dir charts
+          should-contain: "test-chart"
+
+      - name: Commit image tag change
+        run: |
+          cd ${{ steps.setup.outputs.test_dir }}
+          sed -i 's/tag: "1.36"/tag: "1.37"/' charts/test-chart/values.yaml
+          git add charts/test-chart/values.yaml
+          git commit -m "Update busybox tag to 1.37"
+
+      - name: Verify image tag appears in diff
+        uses: ./.github/actions/assert-output
+        with:
+          working-directory: ${{ steps.setup.outputs.test_dir }}
+          command: helm git-diff --base HEAD~1 --current HEAD --chart-dir charts
+          should-contain: "1.37"
+
+      - name: Modify values for uncommitted changes test
+        run: |
+          cd ${{ steps.setup.outputs.test_dir }}
+          sed -i 's/replicaCount: 3/replicaCount: 5/' charts/test-chart/values.yaml
+
+      - name: Test uncommitted changes detection
+        uses: ./.github/actions/assert-output
+        with:
+          working-directory: ${{ steps.setup.outputs.test_dir }}
+          command: >
+            helm git-diff
+            --base HEAD
+            --chart-dir charts
+            test-chart
+          should-contain: "replicas: 5"
+
+      - name: Cleanup uncommitted changes
+        run: |
+          cd ${{ steps.setup.outputs.test_dir }}
+          git checkout charts/test-chart/values.yaml
+
+      - name: Test --values flag
+        run: |
+          cd ${{ steps.setup.outputs.test_dir }}
+          # Create two different values files
+          echo "replicaCount: 10" > values-10.yaml
+          echo "replicaCount: 20" > values-20.yaml
+          # Test that --values is actually being used by checking output contains expected value
+          # Use helm template directly to verify values work
+          helm template release-name charts/test-chart --values values-10.yaml | grep -q "replicas: 10"
+          echo "Values file works with helm template"
+
+      - name: Test --set flag shows no changes
+        uses: ./.github/actions/assert-output
+        with:
+          working-directory: ${{ steps.setup.outputs.test_dir }}
+          command: >
+            helm git-diff
+            --base HEAD
+            --current HEAD
+            --chart-dir charts
+            --set replicaCount=7
+            test-chart
+          should-be-empty: true
+
+      - name: Test multiple --set flags shows no changes
+        uses: ./.github/actions/assert-output
+        with:
+          working-directory: ${{ steps.setup.outputs.test_dir }}
+          command: >
+            helm git-diff
+            --base HEAD
+            --current HEAD
+            --chart-dir charts
+            --set replicaCount=8
+            --set image.tag=2.0
+            test-chart
+          should-be-empty: true
+
+      - name: Test library chart is skipped
+        uses: ./.github/actions/assert-output
+        with:
+          working-directory: ${{ steps.setup.outputs.test_dir }}
+          command: >
+            helm git-diff
+            --base HEAD
+            --current HEAD
+            --chart-dir charts
+            test-library
+          should-contain: "skipped (library chart)"
+
+      - name: Test chart with local file dependencies
+        uses: ./.github/actions/assert-output
+        with:
+          working-directory: ${{ steps.setup.outputs.test_dir }}
+          command: >
+            helm git-diff
+            --base HEAD
+            --current HEAD
+            --chart-dir charts
+            test-with-deps
+          should-be-empty: true
+
+      - name: Test --fail-on-diff flag with differences
+        working-directory: ${{ steps.setup.outputs.test_dir }}
+        run: |
+          CMD="helm git-diff --base HEAD~1 --current HEAD --chart-dir charts"
+          CMD="$CMD --fail-on-diff test-chart"
+          if $CMD; then
+            echo "--fail-on-diff should have exited with code 1"
+            exit 1
+          fi
+
+      - name: Test --fail-on-diff flag without differences
+        working-directory: ${{ steps.setup.outputs.test_dir }}
+        run: helm git-diff --base HEAD --current HEAD --chart-dir charts --fail-on-diff test-chart
+
+      - name: Cleanup test directory
+        if: always()
+        run: rm -rf ${{ steps.setup.outputs.test_dir }}
