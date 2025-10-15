@@ -27,16 +27,17 @@ func (m *multiFlag) Set(value string) error {
 }
 
 type Config struct {
-	Base           string
-	Current        string
-	Charts         []string
-	ChartDir       string
-	ValuesFiles    string
-	SetValues      []string
-	FailOnDiff     bool
-	NoColor        bool
-	hasDifferences bool
-	useColor       bool
+	Base                string
+	Current             string
+	Charts              []string
+	ChartDir            string
+	ValuesFiles         string
+	SetValues           []string
+	FailOnDiff          bool
+	NoColor             bool
+	SkipDependencyBuild bool
+	hasDifferences      bool
+	useColor            bool
 }
 
 func main() {
@@ -73,6 +74,7 @@ func parseFlags() *Config {
 	flag.Var(&setValues, "set", "Set values on the command line (can specify multiple or separate values with commas: key1=val1,key2=val2)")
 	flag.BoolVar(&config.FailOnDiff, "fail-on-diff", false, "Exit with code 1 if differences are found")
 	flag.BoolVar(&config.NoColor, "no-color", false, "Disable colored output")
+	flag.BoolVar(&config.SkipDependencyBuild, "skip-dependency-build", false, "Skip building chart dependencies (use if dependencies are already up to date)")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: helm git-diff [flags] [CHART...]\n\n")
@@ -227,19 +229,19 @@ func diffChart(config *Config, chartName string) error {
 		return nil
 	}
 
-	baseManifest, err := renderChartAtRef(chartPath, config.Base, config.ValuesFiles, config.SetValues)
+	baseManifest, err := renderChartAtRef(chartPath, config.Base, config.ValuesFiles, config.SetValues, config.SkipDependencyBuild)
 	if err != nil {
 		return fmt.Errorf("rendering base manifest: %w", err)
 	}
 
 	var currentManifest string
 	if config.Current == "HEAD" {
-		currentManifest, err = renderChartFromWorkdir(workdirPath, config.ValuesFiles, config.SetValues)
+		currentManifest, err = renderChartFromWorkdir(workdirPath, config.ValuesFiles, config.SetValues, config.SkipDependencyBuild)
 		if err != nil {
 			return fmt.Errorf("rendering current manifest: %w", err)
 		}
 	} else {
-		currentManifest, err = renderChartAtRef(chartPath, config.Current, config.ValuesFiles, config.SetValues)
+		currentManifest, err = renderChartAtRef(chartPath, config.Current, config.ValuesFiles, config.SetValues, config.SkipDependencyBuild)
 		if err != nil {
 			return fmt.Errorf("rendering current manifest: %w", err)
 		}
@@ -335,8 +337,8 @@ func getWorkdirChartPath(gitRelativePath string) (string, error) {
 	return filepath.Join(gitRootPath, gitRelativePath), nil
 }
 
-func renderChartFromWorkdir(chartPath, valuesFiles string, setValues []string) (string, error) {
-	if err := buildDependencies(chartPath); err != nil {
+func renderChartFromWorkdir(chartPath, valuesFiles string, setValues []string, skipDependencyBuild bool) (string, error) {
+	if err := buildDependencies(chartPath, skipDependencyBuild); err != nil {
 		return "", fmt.Errorf("building dependencies: %w", err)
 	}
 
@@ -371,7 +373,7 @@ func renderChartFromWorkdir(chartPath, valuesFiles string, setValues []string) (
 	return string(output), nil
 }
 
-func renderChartAtRef(chartPath, ref, valuesFiles string, setValues []string) (string, error) {
+func renderChartAtRef(chartPath, ref, valuesFiles string, setValues []string, skipDependencyBuild bool) (string, error) {
 	tmpDir, err := os.MkdirTemp("", "helm-git-diff-*")
 	if err != nil {
 		return "", fmt.Errorf("creating temp dir: %w", err)
@@ -415,7 +417,7 @@ func renderChartAtRef(chartPath, ref, valuesFiles string, setValues []string) (s
 
 	extractedChartPath := filepath.Join(tmpDir, chartPath)
 
-	if err := buildDependencies(extractedChartPath); err != nil {
+	if err := buildDependencies(extractedChartPath, skipDependencyBuild); err != nil {
 		return "", fmt.Errorf("building dependencies: %w", err)
 	}
 
@@ -512,9 +514,17 @@ func getChartPathsToExtract(gitRoot, ref, chartPath string) ([]string, error) {
 	return paths, nil
 }
 
-func buildDependencies(chartPath string) error {
+func buildDependencies(chartPath string, skipBuild bool) error {
 	chartYaml := filepath.Join(chartPath, "Chart.yaml")
 	if _, err := os.Stat(chartYaml); os.IsNotExist(err) {
+		return nil
+	}
+
+	if skipBuild {
+		return nil
+	}
+
+	if areDependenciesUpToDate(chartPath) {
 		return nil
 	}
 
@@ -525,4 +535,53 @@ func buildDependencies(chartPath string) error {
 	}
 
 	return nil
+}
+
+func areDependenciesUpToDate(chartPath string) bool {
+	chartYaml := filepath.Join(chartPath, "Chart.yaml")
+	chartLock := filepath.Join(chartPath, "Chart.lock")
+	chartsDir := filepath.Join(chartPath, "charts")
+
+	chartYamlInfo, err := os.Stat(chartYaml)
+	if err != nil {
+		return false
+	}
+
+	chartLockInfo, err := os.Stat(chartLock)
+	if err != nil {
+		return false
+	}
+
+	if _, err := os.Stat(chartsDir); err != nil {
+		return false
+	}
+
+	if chartYamlInfo.ModTime().After(chartLockInfo.ModTime()) {
+		return false
+	}
+
+	content, err := os.ReadFile(chartYaml)
+	if err != nil {
+		return false
+	}
+
+	hasDependencies := false
+	lines := strings.Split(string(content), "\n")
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "dependencies:" {
+			hasDependencies = true
+			break
+		}
+	}
+
+	if !hasDependencies {
+		return true
+	}
+
+	entries, err := os.ReadDir(chartsDir)
+	if err != nil || len(entries) == 0 {
+		return false
+	}
+
+	return true
 }
