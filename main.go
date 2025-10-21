@@ -342,12 +342,17 @@ func renderChartFromWorkdir(chartPath, valuesFiles string, setValues []string, s
 		return "", fmt.Errorf("building dependencies: %w", err)
 	}
 
+	releaseName, err := getChartName(chartPath)
+	if err != nil {
+		return "", fmt.Errorf("getting chart name: %w", err)
+	}
+
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", fmt.Errorf("getting current directory: %w", err)
 	}
 
-	args := []string{"template", "release-name", chartPath}
+	args := []string{"template", releaseName, chartPath}
 	if valuesFiles != "" {
 		for _, vf := range strings.Split(valuesFiles, ",") {
 			valuesPath := strings.TrimSpace(vf)
@@ -421,12 +426,17 @@ func renderChartAtRef(chartPath, ref, valuesFiles string, setValues []string, sk
 		return "", fmt.Errorf("building dependencies: %w", err)
 	}
 
+	releaseName, err := getChartName(extractedChartPath)
+	if err != nil {
+		return "", fmt.Errorf("getting chart name: %w", err)
+	}
+
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", fmt.Errorf("getting current directory: %w", err)
 	}
 
-	helmArgs := []string{"template", "release-name", extractedChartPath}
+	helmArgs := []string{"template", releaseName, extractedChartPath}
 	if valuesFiles != "" {
 		for _, vf := range strings.Split(valuesFiles, ",") {
 			valuesPath := strings.TrimSpace(vf)
@@ -467,6 +477,27 @@ func isLibraryChart(chartYamlPath string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+func getChartName(chartPath string) (string, error) {
+	chartYamlPath := filepath.Join(chartPath, "Chart.yaml")
+	content, err := os.ReadFile(chartYamlPath)
+	if err != nil {
+		return "", fmt.Errorf("reading Chart.yaml: %w", err)
+	}
+
+	lines := strings.Split(string(content), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "name:") {
+			name := strings.TrimSpace(strings.TrimPrefix(line, "name:"))
+			name = strings.Trim(name, "\"'")
+			if name != "" {
+				return name, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("chart name not found in Chart.yaml")
 }
 
 func getChartPathsToExtract(gitRoot, ref, chartPath string) ([]string, error) {
