@@ -75,10 +75,13 @@ jobs:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
 
-      - name: Export GPG keyring to expected format
+      - name: Export GPG keyring to legacy format
         run: |
-          gpg --export > ~/.gnupg/pubring.gpg
-          gpg --export-secret-keys > ~/.gnupg/secring.gpg
+          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+          echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
+          gpgconf --kill gpg-agent
+          gpg --batch --yes --export > ~/.gnupg/pubring.gpg
+          gpg --batch --yes --pinentry-mode loopback --export-secret-keys > ~/.gnupg/secring.gpg
 
       - name: Package and sign plugins
         env:
