@@ -69,19 +69,25 @@ jobs:
         with:
           path: artifacts
 
-      - name: Import GPG key
-        uses: crazy-max/ghaction-import-gpg@e89d40939c28e39f97cf32126055eeae86ba74ec # v6.3.0
-        with:
-          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
-          passphrase: ${{ secrets.GPG_PASSPHRASE }}
-
-      - name: Export GPG keyring to legacy format
+      - name: Import GPG key and create legacy keyring
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
-          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
-          echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
-          gpgconf --kill gpg-agent
+          mkdir -p ~/.gnupg
+          chmod 700 ~/.gnupg
+
+          echo "allow-loopback-pinentry" > ~/.gnupg/gpg-agent.conf
+          echo "pinentry-mode loopback" > ~/.gnupg/gpg.conf
+          echo "batch" >> ~/.gnupg/gpg.conf
+
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+
           gpg --batch --yes --export > ~/.gnupg/pubring.gpg
-          gpg --batch --yes --pinentry-mode loopback --export-secret-keys > ~/.gnupg/secring.gpg
+          echo "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --export-secret-keys > ~/.gnupg/secring.gpg
+
+          echo "Keyring files created:"
+          ls -la ~/.gnupg/*.gpg
 
       - name: Package and sign plugins
         env:
