@@ -15,14 +15,8 @@ platformHooks:
   install:
     - command: ${HELM_PLUGIN_DIR}/install-plugin.sh
     - os: windows
-      command: pwsh
-      args:
-        - -c
-        - ${HELM_PLUGIN_DIR}/install-plugin.sh
+      command: ${HELM_PLUGIN_DIR}\install-plugin.cmd
   update:
     - command: ${HELM_PLUGIN_DIR}/install-plugin.sh
     - os: windows
-      command: pwsh
-      args:
-        - -c
-        - ${HELM_PLUGIN_DIR}/install-plugin.sh
+      command: ${HELM_PLUGIN_DIR}\install-plugin.cmd
