@@ -3,26 +3,126 @@ name: Release
 on:
   push:
     tags:
-      - "*"
+      - "v*"
 
 permissions:
   contents: write
 
+env:
+  GO_VERSION_FILE: go.mod
+
 jobs:
-  goreleaser:
+  build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
     steps:
       - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
 
       - uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
         with:
-          go-version-file: "go.mod"
+          go-version-file: ${{ env.GO_VERSION_FILE }}
 
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          BINARY_NAME="helm-git-diff"
+          if [ "$GOOS" = "windows" ]; then
+            BINARY_NAME="helm-git-diff.exe"
+          fi
+          go build -o "bin/${BINARY_NAME}" .
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          distribution: goreleaser
-          version: "~> v2"
-          args: release --clean
+          name: binary-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: bin/
+          retention-days: 1
+
+  package:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+
+      - name: Install Helm 4
+        uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
+        with:
+          version: v4.0.0
+
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          path: artifacts
+
+      - name: Import GPG key
+        uses: crazy-max/ghaction-import-gpg@e89d40939c28e39f97cf32126055eeae86ba74ec # v6.3.0
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+
+      - name: Package and sign plugins
+        env:
+          GPG_KEY_ID: ${{ vars.GPG_KEY_ID }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          mkdir -p dist
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          for artifact_dir in artifacts/binary-*; do
+            platform=$(basename "$artifact_dir" | sed 's/binary-//')
+            goos=$(echo "$platform" | cut -d'-' -f1)
+            goarch=$(echo "$platform" | cut -d'-' -f2)
+
+            plugin_dir="plugin-${goos}-${goarch}"
+            mkdir -p "$plugin_dir/bin"
+
+            cp plugin.yaml "$plugin_dir/"
+            cp install-plugin.sh "$plugin_dir/"
+            cp LICENSE "$plugin_dir/"
+            cp README.md "$plugin_dir/"
+            cp -r "$artifact_dir"/* "$plugin_dir/bin/"
+
+            cd "$plugin_dir"
+            echo "$GPG_PASSPHRASE" | helm plugin package . \
+              --sign \
+              --key "$GPG_KEY_ID" \
+              --passphrase-file - \
+              --destination ../dist
+            cd ..
+          done
+
+          ls -la dist/
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum *.tgz > checksums.txt
+          cat checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        with:
+          files: |
+            dist/*.tgz
+            dist/*.tgz.prov
+            dist/checksums.txt
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,5 +1,5 @@
 name: "git-diff"
-version: "0.2.1"
+version: "0.3.0"
 usage: "helm git-diff [flags] [CHART...]"
 description: |
   Compare rendered Kubernetes manifests between git commits.
