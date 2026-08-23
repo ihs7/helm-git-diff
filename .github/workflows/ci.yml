@@ -10,6 +10,7 @@ jobs:
   build:
     name: "Build & Test"
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
@@ -27,6 +28,7 @@ jobs:
     name: helm install
     needs: [build]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -52,6 +54,7 @@ jobs:
     name: Integration Tests
     needs: [build]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       matrix:
         helm-version: [v3.18.6, v3.19.0, v4.0.0]
